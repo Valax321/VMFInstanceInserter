@@ -94,7 +94,7 @@ class Program
         {
             foreach (var path in fgdpaths)
             {
-                VMFStructure.ParseFGD(path);
+                VMFStructure.ParseFGD2(path);
             }
 
             var file = new VMFFile(vmf);

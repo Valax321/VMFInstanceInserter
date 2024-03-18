@@ -1,4 +1,7 @@
 ﻿using System.Text.RegularExpressions;
+using System.Xml.Linq;
+using Sledge.Formats.GameData;
+using Sledge.Formats.GameData.Objects;
 
 namespace VMFInstanceInserter;
 
@@ -138,6 +141,85 @@ class VMFStructure : IEnumerable<VMFStructure>
     private static readonly Regex _sClassTypeRegex = new Regex("^@(?<classType>[A-Z]([A-Za-z])*Class)( |=)");
     private static readonly Regex _sBaseDefRegex = new Regex("base\\(\\s*[A-Za-z0-9_]+(\\s*,\\s*[A-Za-z0-9_]+)*\\s*\\)");
     private static readonly Regex _sParamDefRegex = new Regex("^[a-zA-Z0-9_]+\\s*\\(\\s*[A-Za-z0-9_]+\\s*\\)(\\s*readonly\\s*|\\s*):.*$");
+
+    public static void ParseFGD2(string path)
+    {
+        var fgd = FgdFormat.ReadFile(path);
+        foreach (var ent in fgd.Classes)
+        {
+            if (ent.ClassType == ClassType.BaseClass)
+                continue;
+
+            void ParseEntityClass(GameDataClass fgdClass, string classname)
+            {
+                foreach (var baseClass in fgdClass.BaseClasses)
+                {
+                    var clazz = fgd.Classes.FirstOrDefault(x => x.Name.Equals(baseClass, StringComparison.InvariantCultureIgnoreCase));
+                    if (clazz != null)
+                        ParseEntityClass(clazz, classname);
+                }
+
+                var curEntityDict = stEntitiesDict.GetOrAdd(classname, (_) => []);
+                if (fgdClass.ClassType == ClassType.SolidClass)
+                {
+                    curEntityDict.TryAdd("angles", TransformType.None);
+                }
+
+                foreach (var prop in fgdClass.Properties)
+                {
+                    var type = TransformType.None;
+                    switch (prop.VariableType)
+                    {
+                        case VariableType.Angle:
+                            type = TransformType.Angle;
+                            break;
+                        case VariableType.Origin:
+                            type = TransformType.Position;
+                            break;
+                        case VariableType.TargetDestination:
+                        case VariableType.TargetSource:
+                        case VariableType.FilterClass:
+                            type = TransformType.EntityName;
+                            break;
+                        case VariableType.Vecline:
+                            // Single point axis helpers (see phys_motor, for example) are stored
+                            // as absolute world coordinates, not angles as one might expect.
+                            type = TransformType.Position;
+                            break;
+                        case VariableType.Vector:
+                            // Temporary hack to fix mistake on valve's part
+                            if (ent.Name == "func_useableladder" && (prop.Name == "point0" || prop.Name == "point1"))
+                            {
+                                type = TransformType.Position;
+                            }
+                            else if (ent.Name == "info_overlay")
+                            {
+                                if (prop.Name == "BasisOrigin")
+                                    type = TransformType.Position;
+                                else if (prop.Name == "BasisNormal" || prop.Name == "BasisU" || prop.Name == "BasisV")
+                                    type = TransformType.Offset;
+                                else
+                                    type = TransformType.None;
+                            }
+                            else
+                            {
+                                type = TransformType.Offset;
+                            }
+                            break;
+                        case VariableType.SideList:
+                            type = TransformType.Identifier;
+                            break;
+                    }
+
+                    curEntityDict.TryAdd(prop.Name, type);
+                }
+            }
+
+            ParseEntityClass(ent, ent.Name);
+        }
+    }
+
+    [Obsolete("Use ParseFGD2 instead")]
     public static void ParseFGD(string path)
     {
         Console.WriteLine("Loading {0}", Path.GetFileName(path));
