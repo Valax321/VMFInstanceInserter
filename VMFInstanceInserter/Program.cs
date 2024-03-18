@@ -2,10 +2,12 @@ namespace VMFInstanceInserter;
 
 class Program
 {
+    public static string GameDir = null;
+
     static void Main(string[] args)
     {
 #if !DEBUG
-        Directory.SetCurrentDirectory(Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location));
+        Directory.SetCurrentDirectory(Path.GetDirectoryName(AppDomain.CurrentDomain.BaseDirectory));
 #endif
 
         var paths = new List<string>();
@@ -30,6 +32,10 @@ class Program
                     case "-fgd":
                         fgdpaths = args[++i].Split(',').Select(x => x.Trim()).ToArray();
                         break;
+                    case "i":
+                    case "-instancedir":
+                        GameDir = args[++i];
+                            break;
                 }
             }
         }

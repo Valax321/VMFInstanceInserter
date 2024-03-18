@@ -175,7 +175,7 @@ class VMFFile
                                 vmf = stVMFCache[file];
                             else
                             {
-                                vmf = new VMFFile(file, Path.Combine(Path.GetDirectoryName(OriginalPath), "instances"));
+                                vmf = new VMFFile(file, Program.GameDir); // EVIL HACK
                                 if (vmf.Root != null)
                                     vmf.ResolveInstances();
                             }
@@ -250,6 +250,8 @@ class VMFFile
     public void Save(string path)
     {
         Console.WriteLine("Saving to " + path + "...");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path));
 
         using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write))
             Root.Write(new StreamWriter(stream));
