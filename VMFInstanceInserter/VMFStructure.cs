@@ -1,585 +1,656 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.IO;
-using System.Reflection;
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
-namespace VMFInstanceInserter
+namespace VMFInstanceInserter;
+
+enum VMFStructureType
 {
-    enum VMFStructureType
+    File,
+    VersionInfo,
+    VisGroups,
+    ViewSettings,
+    World,
+    Solid,
+    Side,
+    Editor,
+    Entity,
+    Connections,
+    Group,
+    Cameras,
+    Camera,
+    Cordon,
+    Visgroup,
+    DispInfo,
+    Hidden,
+    Normals,
+    Distances,
+    Offsets,
+    Offset_Normals,
+    Alphas,
+    Triangle_Tags,
+    Allowed_Verts,
+    Unknown
+}
+
+enum TransformType
+{
+    None = 0,
+    Offset = 1,
+    Angle = 2,
+    Position = 3,
+    EntityName = 4,
+    Identifier = 5
+}
+
+enum TargetNameFixupStyle
+{
+    Prefix = 0,
+    Postfix = 1,
+    None = 2
+}
+
+class VMFStructure : IEnumerable<VMFStructure>
+{
+    private static readonly Dictionary<string, VMFStructureType> stTypeDict;
+
+    private static readonly Dictionary<VMFStructureType, Dictionary<string, TransformType>> stTransformDict = new Dictionary<VMFStructureType, Dictionary<string, TransformType>>
     {
-        File,
-        VersionInfo,
-        VisGroups,
-        ViewSettings,
-        World,
-        Solid,
-        Side,
-        Editor,
-        Entity,
-        Connections,
-        Group,
-        Cameras,
-        Camera,
-        Cordon,
-        Visgroup,
-        DispInfo,
-        Hidden,
-        Normals,
-        Distances,
-        Offsets,
-        Offset_Normals,
-        Alphas,
-        Triangle_Tags,
-        Allowed_Verts,
-        Unknown
+        { VMFStructureType.Side, new Dictionary<string, TransformType>
+        {
+            { "plane", TransformType.Position },
+            { "uaxis", TransformType.Position },
+            { "vaxis", TransformType.Position }
+        } },
+        { VMFStructureType.Entity, new Dictionary<string, TransformType>
+        {
+            { "origin", TransformType.Position },
+            { "angles", TransformType.Angle },
+            { "targetname", TransformType.EntityName },
+            { "parentname", TransformType.EntityName },
+            { "lowerleft", TransformType.Position },
+            { "lowerright", TransformType.Position },
+            { "upperleft", TransformType.Position },
+            { "upperright", TransformType.Position }
+        } },
+        { VMFStructureType.DispInfo, new Dictionary<string, TransformType>
+        {
+            { "startposition", TransformType.Position }
+        } },
+        { VMFStructureType.Normals, new Dictionary<string, TransformType>
+        {
+            { "row[0-9]+", TransformType.Offset }
+        } },
+        { VMFStructureType.Offsets, new Dictionary<string, TransformType>
+        {
+            { "row[0-9]+", TransformType.Offset }
+        } },
+        { VMFStructureType.Offset_Normals, new Dictionary<string, TransformType>
+        {
+            { "row[0-9]+", TransformType.Offset }
+        } }
+    };
+
+    private static readonly Dictionary<string, Dictionary<string, TransformType>> stEntitiesDict = new Dictionary<string, Dictionary<string, TransformType>>();
+    private static readonly Dictionary<string, TransformType> stInputsDict = new Dictionary<string, TransformType>();
+
+    static VMFStructure()
+    {
+        stTypeDict = new Dictionary<string, VMFStructureType>();
+
+        foreach (var name in Enum.GetNames(typeof(VMFStructureType)))
+            stTypeDict.Add(name.ToLower(), (VMFStructureType)Enum.Parse(typeof(VMFStructureType), name));
     }
 
-    enum TransformType
+    private static string TrimFGDLine(string line)
     {
-        None = 0,
-        Offset = 1,
-        Angle = 2,
-        Position = 3,
-        EntityName = 4,
-        Identifier = 5
-    }
+        line = line.Trim();
 
-    enum TargetNameFixupStyle
-    {
-        Prefix = 0,
-        Postfix = 1,
-        None = 2
-    }
-
-    class VMFStructure : IEnumerable<VMFStructure>
-    {
-        private static readonly Dictionary<String, VMFStructureType> stTypeDict;
-
-        private static readonly Dictionary<VMFStructureType, Dictionary<String, TransformType>> stTransformDict = new Dictionary<VMFStructureType, Dictionary<string, TransformType>>
+        var escaped = false;
+        var inString = false;
+        for (var i = 0; i < line.Length; ++i)
         {
-            { VMFStructureType.Side, new Dictionary<String, TransformType>
+            var c = line[i];
+            if (escaped)
             {
-                { "plane", TransformType.Position },
-                { "uaxis", TransformType.Position },
-                { "vaxis", TransformType.Position }
-            } },
-            { VMFStructureType.Entity, new Dictionary<String, TransformType>
-            {
-                { "origin", TransformType.Position },
-                { "angles", TransformType.Angle },
-                { "targetname", TransformType.EntityName },
-                { "parentname", TransformType.EntityName },
-                { "lowerleft", TransformType.Position },
-                { "lowerright", TransformType.Position },
-                { "upperleft", TransformType.Position },
-                { "upperright", TransformType.Position }
-            } },
-            { VMFStructureType.DispInfo, new Dictionary<String, TransformType>
-            {
-                { "startposition", TransformType.Position }
-            } },
-            { VMFStructureType.Normals, new Dictionary<String, TransformType>
-            {
-                { "row[0-9]+", TransformType.Offset }
-            } },
-            { VMFStructureType.Offsets, new Dictionary<String, TransformType>
-            {
-                { "row[0-9]+", TransformType.Offset }
-            } },
-            { VMFStructureType.Offset_Normals, new Dictionary<String, TransformType>
-            {
-                { "row[0-9]+", TransformType.Offset }
-            } }
-        };
-
-        private static readonly Dictionary<String, Dictionary<String, TransformType>> stEntitiesDict = new Dictionary<String, Dictionary<string, TransformType>>();
-        private static readonly Dictionary<String, TransformType> stInputsDict = new Dictionary<String, TransformType>();
-
-        static VMFStructure()
-        {
-            stTypeDict = new Dictionary<string, VMFStructureType>();
-
-            foreach (String name in Enum.GetNames(typeof(VMFStructureType)))
-                stTypeDict.Add(name.ToLower(), (VMFStructureType) Enum.Parse(typeof(VMFStructureType), name));
-        }
-
-        private static string TrimFGDLine(String line)
-        {
-            line = line.Trim();
-
-            bool escaped = false;
-            bool inString = false;
-            for (int i = 0; i < line.Length; ++i) {
-                char c = line[i];
-                if (escaped) {
-                    escaped = false; break;
-                }
-                
-                if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    inString = !inString;
-                } else if (!inString && c == '/') {
-                    if (i < line.Length - 1 && line[i + 1] == '/') {
-                        return line.Substring(0, i).TrimEnd();
-                    }
-                }
+                escaped = false; break;
             }
 
-            return line;
+            if (c == '\\')
+            {
+                escaped = true;
+            }
+            else if (c == '"')
+            {
+                inString = !inString;
+            }
+            else if (!inString && c == '/')
+            {
+                if (i < line.Length - 1 && line[i + 1] == '/')
+                {
+                    return line.Substring(0, i).TrimEnd();
+                }
+            }
         }
 
-        private static readonly Regex _sIncludeRegex = new Regex("^@include \"[^\"]+\"");
-        private static readonly Regex _sClassTypeRegex = new Regex("^@(?<classType>[A-Z]([A-Za-z])*Class)( |=)");
-        private static readonly Regex _sBaseDefRegex = new Regex("base\\(\\s*[A-Za-z0-9_]+(\\s*,\\s*[A-Za-z0-9_]+)*\\s*\\)");
-        private static readonly Regex _sParamDefRegex = new Regex("^[a-zA-Z0-9_]+\\s*\\(\\s*[A-Za-z0-9_]+\\s*\\)(\\s*readonly\\s*|\\s*):.*$");
-        public static void ParseFGD(String path)
-        {
-            Console.WriteLine("Loading {0}", Path.GetFileName(path));
+        return line;
+    }
 
-            if (!File.Exists(path)) {
-                Console.WriteLine("File does not exist!");
-                return;
+    private static readonly Regex _sIncludeRegex = new Regex("^@include \"[^\"]+\"");
+    private static readonly Regex _sClassTypeRegex = new Regex("^@(?<classType>[A-Z]([A-Za-z])*Class)( |=)");
+    private static readonly Regex _sBaseDefRegex = new Regex("base\\(\\s*[A-Za-z0-9_]+(\\s*,\\s*[A-Za-z0-9_]+)*\\s*\\)");
+    private static readonly Regex _sParamDefRegex = new Regex("^[a-zA-Z0-9_]+\\s*\\(\\s*[A-Za-z0-9_]+\\s*\\)(\\s*readonly\\s*|\\s*):.*$");
+    public static void ParseFGD(string path)
+    {
+        Console.WriteLine("Loading {0}", Path.GetFileName(path));
+
+        if (!File.Exists(path))
+        {
+            Console.WriteLine("File does not exist!");
+            return;
+        }
+
+        var reader = new StreamReader(path);
+
+        string curName = null;
+        Dictionary<string, TransformType> curDict = null;
+
+        while (!reader.EndOfStream)
+        {
+            var line = TrimFGDLine(reader.ReadLine());
+            if (line.Length == 0) continue;
+            while ((line.EndsWith("+") || line.EndsWith(":")) && !reader.EndOfStream)
+            {
+                line = line.TrimEnd('+', ' ', '\t') + TrimFGDLine(reader.ReadLine());
             }
 
-            StreamReader reader = new StreamReader(path);
+            Match match;
 
-            String curName = null;
-            Dictionary<String, TransformType> curDict = null;
+            if (_sIncludeRegex.IsMatch(line))
+            {
+                var start = line.IndexOf('"') + 1;
+                var end = line.IndexOf('"', start);
+                ParseFGD(Path.Combine(Path.GetDirectoryName(path), line.Substring(start, end - start)));
+            }
+            else if ((match = _sClassTypeRegex.Match(line)).Success)
+            {
+                var start = line.IndexOf('=') + 1;
+                var end = Math.Max(line.IndexOf(':', start), line.IndexOf('[', start));
+                if (end == -1) end = line.Length;
+                curName = line.Substring(start, end - start).Trim();
 
-            while (!reader.EndOfStream) {
-                String line = TrimFGDLine(reader.ReadLine());
-                if (line.Length == 0) continue;
-                while ((line.EndsWith("+") || line.EndsWith(":")) && !reader.EndOfStream) {
-                    line = line.TrimEnd('+', ' ', '\t') + TrimFGDLine(reader.ReadLine());
+                if (!stEntitiesDict.ContainsKey(curName))
+                {
+                    stEntitiesDict.Add(curName, new Dictionary<string, TransformType>());
                 }
 
-                Match match;
+                curDict = stEntitiesDict[curName];
 
-                if (_sIncludeRegex.IsMatch(line)) {
-                    int start = line.IndexOf('"') + 1;
-                    int end = line.IndexOf('"', start);
-                    ParseFGD(Path.Combine(Path.GetDirectoryName(path), line.Substring(start, end - start)));
-                } else if ((match = _sClassTypeRegex.Match(line)).Success) {
-                    int start = line.IndexOf('=') + 1;
-                    int end = Math.Max(line.IndexOf(':', start), line.IndexOf('[', start));
-                    if (end == -1) end = line.Length;
-                    curName = line.Substring(start, end - start).Trim();
-                    
-                    if (!stEntitiesDict.ContainsKey(curName)) {
-                        stEntitiesDict.Add(curName, new Dictionary<string,TransformType>());
-                    }
+                // Don't rotate angles for brush entities
+                if (match.Groups["classType"].Value.Equals("SolidClass", StringComparison.InvariantCultureIgnoreCase))
+                {
+                    curDict.Add("angles", TransformType.None);
+                }
 
-                    curDict = stEntitiesDict[curName];
+                var basesMatch = _sBaseDefRegex.Match(line);
+                while (basesMatch.Success && basesMatch.Index < start)
+                {
+                    var baseStart = basesMatch.Value.IndexOf('(') + 1;
+                    var baseEnd = basesMatch.Value.IndexOf(')', baseStart);
+                    var bases = basesMatch.Value.Substring(baseStart, baseEnd - baseStart).Split(',');
 
-                    // Don't rotate angles for brush entities
-                    if (match.Groups["classType"].Value.Equals("SolidClass", StringComparison.InvariantCultureIgnoreCase)) {
-                        curDict.Add("angles", TransformType.None);
-                    }
-
-                    var basesMatch = _sBaseDefRegex.Match(line);
-                    while (basesMatch.Success && basesMatch.Index < start) {
-                        int baseStart = basesMatch.Value.IndexOf('(') + 1;
-                        int baseEnd = basesMatch.Value.IndexOf(')', baseStart);
-                        var bases = basesMatch.Value.Substring(baseStart, baseEnd - baseStart).Split(',');
-
-                        foreach (var baseName in bases) {
-                            var trimmed = baseName.Trim();
-                            if (stEntitiesDict.ContainsKey(trimmed)) {
-                                foreach (var keyVal in stEntitiesDict[trimmed]) {
-                                    if (!curDict.ContainsKey(keyVal.Key)) {
-                                        curDict.Add(keyVal.Key, keyVal.Value);
-                                    }
+                    foreach (var baseName in bases)
+                    {
+                        var trimmed = baseName.Trim();
+                        if (stEntitiesDict.ContainsKey(trimmed))
+                        {
+                            foreach (var keyVal in stEntitiesDict[trimmed])
+                            {
+                                if (!curDict.ContainsKey(keyVal.Key))
+                                {
+                                    curDict.Add(keyVal.Key, keyVal.Value);
                                 }
-                            } else {
-                                Console.WriteLine("Undefined parent for class {0} : {1}", curName, trimmed);
                             }
                         }
-
-                        basesMatch = basesMatch.NextMatch();
+                        else
+                        {
+                            Console.WriteLine("Undefined parent for class {0} : {1}", curName, trimmed);
+                        }
                     }
-                } else if (curDict != null && _sParamDefRegex.IsMatch(line)) {
-                    int start = line.IndexOf('(') + 1;
-                    int end = line.IndexOf(')', start);
-                    string name = line.Substring(0, start - 1).TrimEnd();
-                    string typeName = line.Substring(start, end - start).Trim().ToLower();
 
-                    TransformType type = TransformType.None;
-                    switch (typeName) {
-                        case "angle":
-                            type = TransformType.Angle;
-                            break;
-                        case "origin":
+                    basesMatch = basesMatch.NextMatch();
+                }
+            }
+            else if (curDict != null && _sParamDefRegex.IsMatch(line))
+            {
+                var start = line.IndexOf('(') + 1;
+                var end = line.IndexOf(')', start);
+                var name = line.Substring(0, start - 1).TrimEnd();
+                var typeName = line.Substring(start, end - start).Trim().ToLower();
+
+                var type = TransformType.None;
+                switch (typeName)
+                {
+                    case "angle":
+                        type = TransformType.Angle;
+                        break;
+                    case "origin":
+                        type = TransformType.Position;
+                        break;
+                    case "target_destination":
+                    case "target_source":
+                    case "filterclass":
+                        type = TransformType.EntityName;
+                        break;
+                    case "vecline":
+                        // Single point axis helpers (see phys_motor, for example) are stored
+                        // as absolute world coordinates, not angles as one might expect.
+                        type = TransformType.Position;
+                        break;
+                    case "vector":
+                        // Temporary hack to fix mistake on valve's part
+                        if (curName == "func_useableladder" && (name == "point0" || name == "point1"))
+                        {
                             type = TransformType.Position;
-                            break;
-                        case "target_destination":
-                        case "target_source":
-                        case "filterclass":
-                            type = TransformType.EntityName;
-                            break;
-                        case "vecline":
-                            // Single point axis helpers (see phys_motor, for example) are stored
-                            // as absolute world coordinates, not angles as one might expect.
-                            type = TransformType.Position;
-                            break;
-                        case "vector":
-                            // Temporary hack to fix mistake on valve's part
-                            if (curName == "func_useableladder" && (name == "point0" || name == "point1")) {
+                        }
+                        else if (curName == "info_overlay")
+                        {
+                            if (name == "BasisOrigin")
                                 type = TransformType.Position;
-                            } else if (curName == "info_overlay") {
-                                if (name == "BasisOrigin")
-                                    type = TransformType.Position;
-                                else if (name == "BasisNormal" || name == "BasisU" || name == "BasisV")
-                                    type = TransformType.Offset;
-                                else
-                                    type = TransformType.None;
-                            } else {
+                            else if (name == "BasisNormal" || name == "BasisU" || name == "BasisV")
                                 type = TransformType.Offset;
-                            }
-                            break;
-                        case "sidelist":
-                            type = TransformType.Identifier;
-                            break;
-                    }
+                            else
+                                type = TransformType.None;
+                        }
+                        else
+                        {
+                            type = TransformType.Offset;
+                        }
+                        break;
+                    case "sidelist":
+                        type = TransformType.Identifier;
+                        break;
+                }
 
-                    if (!curDict.ContainsKey(name)) {
-                        curDict.Add(name, type);
-                    } else {
-                        curDict[name] = type;
-                    }
+                if (!curDict.ContainsKey(name))
+                {
+                    curDict.Add(name, type);
+                }
+                else
+                {
+                    curDict[name] = type;
                 }
             }
         }
+    }
 
-        private static TransformType ParseTransformType(String str)
+    private static TransformType ParseTransformType(string str)
+    {
+        switch (str.ToLower())
         {
-            switch (str.ToLower()) {
-                case "n":
-                case "null":
-                case "nil":
-                case "none":
-                    return TransformType.None;
-                case "o":
-                case "off":
-                case "offset":
-                    return TransformType.Offset;
-                case "a":
-                case "ang":
-                case "angle":
-                    return TransformType.Angle;
-                case "p":
-                case "pos":
-                case "position":
-                    return TransformType.Position;
-                case "e":
-                case "ent":
-                case "entity":
-                    return TransformType.EntityName;
-                case "i":
-                case "id":
-                case "ident":
-                case "identifier":
-                    return TransformType.Identifier;
-                default:
-                    Console.WriteLine("Bad transform type: " + str);
-                    return TransformType.None;
-            }
+            case "n":
+            case "null":
+            case "nil":
+            case "none":
+                return TransformType.None;
+            case "o":
+            case "off":
+            case "offset":
+                return TransformType.Offset;
+            case "a":
+            case "ang":
+            case "angle":
+                return TransformType.Angle;
+            case "p":
+            case "pos":
+            case "position":
+                return TransformType.Position;
+            case "e":
+            case "ent":
+            case "entity":
+                return TransformType.EntityName;
+            case "i":
+            case "id":
+            case "ident":
+            case "identifier":
+                return TransformType.Identifier;
+            default:
+                Console.WriteLine("Bad transform type: " + str);
+                return TransformType.None;
         }
+    }
 
-        private static String FixupName(String name, TargetNameFixupStyle fixupStyle, String targetName)
+    private static string FixupName(string name, TargetNameFixupStyle fixupStyle, string targetName)
+    {
+        if (fixupStyle == TargetNameFixupStyle.None || targetName == null || name.StartsWith("@") || name.StartsWith("!"))
+            return name;
+
+        switch (fixupStyle)
         {
-            if (fixupStyle == TargetNameFixupStyle.None || targetName == null || name.StartsWith("@") || name.StartsWith("!"))
+            case TargetNameFixupStyle.Postfix:
+                return name + targetName;
+            case TargetNameFixupStyle.Prefix:
+                return targetName + name;
+            default:
                 return name;
+        }
+    }
 
-            switch (fixupStyle) {
-                case TargetNameFixupStyle.Postfix:
-                    return name + targetName;
-                case TargetNameFixupStyle.Prefix:
-                    return targetName + name;
-                default:
-                    return name;
-            }
+    private int myIDIndex;
+
+    public VMFStructureType Type { get; private set; }
+    public int ID
+    {
+        get
+        {
+            if (myIDIndex == -1)
+                return 0;
+
+            return (int)(Properties[myIDIndex].Value as VMFNumberValue).Value;
+        }
+        set
+        {
+            if (myIDIndex == -1)
+                return;
+
+            (Properties[myIDIndex].Value as VMFNumberValue).Value = value;
+        }
+    }
+
+    public List<KeyValuePair<string, VMFValue>> Properties { get; private set; }
+    public List<VMFStructure> Structures { get; private set; }
+
+    public VMFValue this[string key]
+    {
+        get
+        {
+            foreach (var keyVal in Properties)
+                if (keyVal.Key == key)
+                    return keyVal.Value;
+
+            return null;
+        }
+    }
+
+    private static readonly Dictionary<string, TransformType> stDefaultEntDict = new Dictionary<string, TransformType>();
+    private VMFStructure(VMFStructure clone, int idOffset, int nodeOffset, TargetNameFixupStyle fixupStyle, string targetName,
+        List<KeyValuePair<string, string>> replacements, List<KeyValuePair<string, string>> matReplacements)
+    {
+        Type = clone.Type;
+
+        Properties = new List<KeyValuePair<string, VMFValue>>();
+        Structures = new List<VMFStructure>();
+
+        myIDIndex = clone.myIDIndex;
+
+        var entDict = stDefaultEntDict;
+
+        if (Type == VMFStructureType.Entity)
+        {
+            var className = clone["classname"].String;
+            if (className != null && stEntitiesDict.ContainsKey(className))
+                entDict = stEntitiesDict[className];
         }
 
-        private int myIDIndex;
-
-        public VMFStructureType Type { get; private set; }
-        public int ID
+        foreach (var keyVal in clone.Properties)
         {
-            get
+            var str = keyVal.Value.String;
+            var fixup = true;
+            if (replacements != null && str.Contains("$"))
             {
-                if (myIDIndex == -1)
-                    return 0;
-
-                return (int) (Properties[myIDIndex].Value as VMFNumberValue).Value;
+                fixup = false;
+                foreach (var repKeyVal in replacements)
+                    str = str.Replace(repKeyVal.Key, repKeyVal.Value);
             }
-            set
+
+            KeyValuePair<string, VMFValue> kvClone;
+
+            if (keyVal.Value is VMFVector3ArrayValue)
             {
-                if (myIDIndex == -1)
-                    return;
-
-                (Properties[myIDIndex].Value as VMFNumberValue).Value = value;
+                kvClone = new KeyValuePair<string, VMFValue>(keyVal.Key, new VMFVector3ArrayValue() { String = str });
             }
-        }
-
-        public List<KeyValuePair<String, VMFValue>> Properties { get; private set; }
-        public List<VMFStructure> Structures { get; private set; }
-
-        public VMFValue this[String key]
-        {
-            get
-            {
-                foreach (KeyValuePair<String, VMFValue> keyVal in Properties)
-                    if (keyVal.Key == key)
-                        return keyVal.Value;
-
-                return null;
-            }
-        }
-
-        private static readonly Dictionary<String, TransformType> stDefaultEntDict = new Dictionary<string,TransformType>();
-        private VMFStructure(VMFStructure clone, int idOffset, int nodeOffset, TargetNameFixupStyle fixupStyle, String targetName,
-            List<KeyValuePair<String, String>> replacements, List<KeyValuePair<String, String>> matReplacements)
-        {
-            Type = clone.Type;
-
-            Properties = new List<KeyValuePair<string, VMFValue>>();
-            Structures = new List<VMFStructure>();
-
-            myIDIndex = clone.myIDIndex;
-
-            Dictionary<String, TransformType> entDict = stDefaultEntDict;
-
-            if (Type == VMFStructureType.Entity) {
-                String className = clone["classname"].String;
-                if (className != null && stEntitiesDict.ContainsKey(className))
-                    entDict = stEntitiesDict[className];
-            }
-
-            foreach (KeyValuePair<String, VMFValue> keyVal in clone.Properties) {
-                String str = keyVal.Value.String;
-                bool fixup = true;
-                if (replacements != null && str.Contains("$")) {
-                    fixup = false;
-                    foreach (KeyValuePair<String, String> repKeyVal in replacements)
-                        str = str.Replace(repKeyVal.Key, repKeyVal.Value);
-                }
-
-                KeyValuePair<String, VMFValue> kvClone;
-
-                if (keyVal.Value is VMFVector3ArrayValue) {
-                    kvClone = new KeyValuePair<string, VMFValue>(keyVal.Key, new VMFVector3ArrayValue() { String = str } );
-                } else {
-                    kvClone = new KeyValuePair<string, VMFValue>(keyVal.Key, VMFValue.Parse(str));
-                }
-
-                if (Type == VMFStructureType.Connections) {
-                    if (fixup && fixupStyle != TargetNameFixupStyle.None && targetName != null) {
-                        String[] split = kvClone.Value.String.Split(',');
-                        split[0] = FixupName(split[0], fixupStyle, targetName);
-                        if (stInputsDict.ContainsKey(split[1])) {
-                            switch (stInputsDict[split[1]]) {
-                                case TransformType.EntityName:
-                                    split[2] = FixupName(split[2], fixupStyle, targetName);
-                                    break;
-                                // add more later
-                            }
-                        }
-                        kvClone.Value.String = String.Join(",", split);
-                    }
-                } else {
-                    if (Type == VMFStructureType.Side && matReplacements != null && kvClone.Key == "material") {
-                        var material = kvClone.Value.String;
-                        foreach (KeyValuePair<String, String> repKeyVal in matReplacements) {
-                            if (material == repKeyVal.Key) {
-                                ((VMFStringValue) kvClone.Value).String = repKeyVal.Value;
-                                break;
-                            }
-                        }
-                    } else if (kvClone.Key == "groupid") {
-                        ((VMFNumberValue) kvClone.Value).Value += idOffset;
-                    } else if (kvClone.Key == "nodeid") {
-                        ((VMFNumberValue) kvClone.Value).Value += nodeOffset;
-                    } else if (Type == VMFStructureType.Entity) {
-                        TransformType trans = entDict.ContainsKey(kvClone.Key) ? entDict[kvClone.Key] : TransformType.None;
-
-                        if (trans == TransformType.Identifier) {
-                            kvClone.Value.OffsetIdentifiers(idOffset);
-                        } else if (fixup && (kvClone.Key == "targetname" || trans == TransformType.EntityName) && fixupStyle != TargetNameFixupStyle.None && targetName != null) {
-                            kvClone = new KeyValuePair<string, VMFValue>(kvClone.Key, new VMFStringValue { String = FixupName(kvClone.Value.String, fixupStyle, targetName) });
-                        }
-                    }
-                }
-
-                Properties.Add(kvClone);
-            }
-
-            foreach (VMFStructure structure in clone.Structures)
-                Structures.Add(new VMFStructure(structure, idOffset, nodeOffset, fixupStyle, targetName, replacements, matReplacements));
-
-            ID += idOffset;
-        }
-
-        public VMFStructure(String type, StreamReader reader)
-        {
-            if (stTypeDict.ContainsKey(type))
-                Type = stTypeDict[type];
             else
-                Type = VMFStructureType.Unknown;
+            {
+                kvClone = new KeyValuePair<string, VMFValue>(keyVal.Key, VMFValue.Parse(str));
+            }
 
-            Properties = new List<KeyValuePair<String, VMFValue>>();
-            Structures = new List<VMFStructure>();
+            if (Type == VMFStructureType.Connections)
+            {
+                if (fixup && fixupStyle != TargetNameFixupStyle.None && targetName != null)
+                {
+                    var split = kvClone.Value.String.Split(',');
+                    split[0] = FixupName(split[0], fixupStyle, targetName);
+                    if (stInputsDict.ContainsKey(split[1]))
+                    {
+                        switch (stInputsDict[split[1]])
+                        {
+                            case TransformType.EntityName:
+                                split[2] = FixupName(split[2], fixupStyle, targetName);
+                                break;
+                                // add more later
+                        }
+                    }
+                    kvClone.Value.String = string.Join(",", split);
+                }
+            }
+            else
+            {
+                if (Type == VMFStructureType.Side && matReplacements != null && kvClone.Key == "material")
+                {
+                    var material = kvClone.Value.String;
+                    foreach (var repKeyVal in matReplacements)
+                    {
+                        if (material == repKeyVal.Key)
+                        {
+                            ((VMFStringValue)kvClone.Value).String = repKeyVal.Value;
+                            break;
+                        }
+                    }
+                }
+                else if (kvClone.Key == "groupid")
+                {
+                    ((VMFNumberValue)kvClone.Value).Value += idOffset;
+                }
+                else if (kvClone.Key == "nodeid")
+                {
+                    ((VMFNumberValue)kvClone.Value).Value += nodeOffset;
+                }
+                else if (Type == VMFStructureType.Entity)
+                {
+                    var trans = entDict.ContainsKey(kvClone.Key) ? entDict[kvClone.Key] : TransformType.None;
 
-            myIDIndex = -1;
+                    if (trans == TransformType.Identifier)
+                    {
+                        kvClone.Value.OffsetIdentifiers(idOffset);
+                    }
+                    else if (fixup && (kvClone.Key == "targetname" || trans == TransformType.EntityName) && fixupStyle != TargetNameFixupStyle.None && targetName != null)
+                    {
+                        kvClone = new KeyValuePair<string, VMFValue>(kvClone.Key, new VMFStringValue { String = FixupName(kvClone.Value.String, fixupStyle, targetName) });
+                    }
+                }
+            }
 
-            String line;
-            while (!reader.EndOfStream && (line = reader.ReadLine().Trim()) != "}") {
-                if (line == "{" || line.Length == 0)
+            Properties.Add(kvClone);
+        }
+
+        foreach (var structure in clone.Structures)
+            Structures.Add(new VMFStructure(structure, idOffset, nodeOffset, fixupStyle, targetName, replacements, matReplacements));
+
+        ID += idOffset;
+    }
+
+    public VMFStructure(string type, StreamReader reader)
+    {
+        if (stTypeDict.ContainsKey(type))
+            Type = stTypeDict[type];
+        else
+            Type = VMFStructureType.Unknown;
+
+        Properties = new List<KeyValuePair<string, VMFValue>>();
+        Structures = new List<VMFStructure>();
+
+        myIDIndex = -1;
+
+        string line;
+        while (!reader.EndOfStream && (line = reader.ReadLine().Trim()) != "}")
+        {
+            if (line == "{" || line.Length == 0)
+                continue;
+
+            if (line[0] == '"')
+            {
+                var pair = line.Trim('"').Split(new string[] { "\" \"" }, StringSplitOptions.None);
+                if (pair.Length != 2)
                     continue;
 
-                if (line[0] == '"') {
-                    String[] pair = line.Trim('"').Split(new String[] { "\" \"" }, StringSplitOptions.None);
-                    if (pair.Length != 2)
-                        continue;
+                KeyValuePair<string, VMFValue> keyVal;
 
-                    KeyValuePair<String, VMFValue> keyVal;
-                    
-                    if (Type == VMFStructureType.Normals || Type == VMFStructureType.Offsets || Type == VMFStructureType.Offset_Normals) {
-                        keyVal = new KeyValuePair<string,VMFValue>(pair[0], new VMFVector3ArrayValue() { String = pair[1] });
-                    } else {
-                        keyVal = new KeyValuePair<string,VMFValue>(pair[0], VMFValue.Parse(pair[1]));
-                    }
-
-                    if (keyVal.Key == "id" && keyVal.Value is VMFNumberValue)
-                        myIDIndex = Properties.Count;
-
-                    Properties.Add(keyVal);
-                } else {
-                    Structures.Add(new VMFStructure(line, reader));
+                if (Type == VMFStructureType.Normals || Type == VMFStructureType.Offsets || Type == VMFStructureType.Offset_Normals)
+                {
+                    keyVal = new KeyValuePair<string, VMFValue>(pair[0], new VMFVector3ArrayValue() { String = pair[1] });
                 }
+                else
+                {
+                    keyVal = new KeyValuePair<string, VMFValue>(pair[0], VMFValue.Parse(pair[1]));
+                }
+
+                if (keyVal.Key == "id" && keyVal.Value is VMFNumberValue)
+                    myIDIndex = Properties.Count;
+
+                Properties.Add(keyVal);
+            }
+            else
+            {
+                Structures.Add(new VMFStructure(line, reader));
             }
         }
+    }
 
-        public void Write(StreamWriter writer, int depth = 0)
+    public void Write(StreamWriter writer, int depth = 0)
+    {
+        if (Type == VMFStructureType.File)
         {
-            if (Type == VMFStructureType.File) {
-                foreach (VMFStructure structure in Structures)
-                    structure.Write(writer, depth);
-            } else {
-                String indent = "";
-                for (int i = 0; i < depth; ++i)
-                    indent += "\t";
+            foreach (var structure in Structures)
+                structure.Write(writer, depth);
+        }
+        else
+        {
+            var indent = "";
+            for (var i = 0; i < depth; ++i)
+                indent += "\t";
 
-                writer.WriteLine(indent + Type.ToString().ToLower());
-                writer.WriteLine(indent + "{");
-                foreach (KeyValuePair<String, VMFValue> keyVal in Properties)
-                    writer.WriteLine(indent + "\t\"" + keyVal.Key + "\" \"" + keyVal.Value.String + "\"");
-                foreach (VMFStructure structure in Structures)
-                    structure.Write(writer, depth + 1);
-                writer.WriteLine(indent + "}");
-            }
-
-            writer.Flush();
+            writer.WriteLine(indent + Type.ToString().ToLower());
+            writer.WriteLine(indent + "{");
+            foreach (var keyVal in Properties)
+                writer.WriteLine(indent + "\t\"" + keyVal.Key + "\" \"" + keyVal.Value.String + "\"");
+            foreach (var structure in Structures)
+                structure.Write(writer, depth + 1);
+            writer.WriteLine(indent + "}");
         }
 
-        public VMFStructure Clone(int idOffset = 0, int nodeOffset = 0, TargetNameFixupStyle fixupStyle = TargetNameFixupStyle.None,
-            String targetName = null, List<KeyValuePair<String, String>> replacements = null, List<KeyValuePair<String, String>> matReplacements = null)
+        writer.Flush();
+    }
+
+    public VMFStructure Clone(int idOffset = 0, int nodeOffset = 0, TargetNameFixupStyle fixupStyle = TargetNameFixupStyle.None,
+        string targetName = null, List<KeyValuePair<string, string>> replacements = null, List<KeyValuePair<string, string>> matReplacements = null)
+    {
+        return new VMFStructure(this, idOffset, nodeOffset, fixupStyle, targetName, replacements, matReplacements);
+    }
+
+    public void Transform(VMFVector3Value translation, VMFVector3Value rotation)
+    {
+        Dictionary<string, TransformType> transDict = null;
+        Dictionary<string, TransformType> entDict = null;
+
+        if (stTransformDict.ContainsKey(Type))
+            transDict = stTransformDict[Type];
+
+        if (Type == VMFStructureType.Entity)
         {
-            return new VMFStructure(this, idOffset, nodeOffset, fixupStyle, targetName, replacements, matReplacements);
+            var className = this["classname"].String;
+            if (className != null && stEntitiesDict.ContainsKey(className))
+                entDict = stEntitiesDict[className];
         }
 
-        public void Transform(VMFVector3Value translation, VMFVector3Value rotation)
+        if (transDict != null || entDict != null)
         {
-            Dictionary<String, TransformType> transDict = null;
-            Dictionary<String, TransformType> entDict = null;
+            foreach (var keyVal in Properties)
+            {
+                var trans = TransformType.None;
 
-            if (stTransformDict.ContainsKey(Type))
-                transDict = stTransformDict[Type];
-
-            if (Type == VMFStructureType.Entity) {
-                String className = this["classname"].String;
-                if (className != null && stEntitiesDict.ContainsKey(className))
-                    entDict = stEntitiesDict[className];
-            }
-
-            if (transDict != null || entDict != null) {
-                foreach (KeyValuePair<String, VMFValue> keyVal in Properties) {
-                    TransformType trans = TransformType.None;
-
-                    if (transDict != null) {
-                        foreach (String key in transDict.Keys) {
-                            if (Regex.IsMatch(keyVal.Key, key)) {
-                                trans = transDict[key];
-                            }
+                if (transDict != null)
+                {
+                    foreach (var key in transDict.Keys)
+                    {
+                        if (Regex.IsMatch(keyVal.Key, key))
+                        {
+                            trans = transDict[key];
                         }
                     }
+                }
 
-                    if (entDict != null && entDict.ContainsKey(keyVal.Key))
-                        trans = entDict[keyVal.Key];
+                if (entDict != null && entDict.ContainsKey(keyVal.Key))
+                    trans = entDict[keyVal.Key];
 
-                    switch (trans) {
-                        case TransformType.Offset:
-                            keyVal.Value.Rotate(rotation);
-                            break;
-                        case TransformType.Angle:
-                            keyVal.Value.AddAngles(rotation);
-                            break;
-                        case TransformType.Position:
-                            keyVal.Value.Rotate(rotation);
-                            keyVal.Value.Offset(translation);
-                            break;
-                    }
+                switch (trans)
+                {
+                    case TransformType.Offset:
+                        keyVal.Value.Rotate(rotation);
+                        break;
+                    case TransformType.Angle:
+                        keyVal.Value.AddAngles(rotation);
+                        break;
+                    case TransformType.Position:
+                        keyVal.Value.Rotate(rotation);
+                        keyVal.Value.Offset(translation);
+                        break;
                 }
             }
-
-            foreach (VMFStructure structure in Structures)
-                structure.Transform(translation, rotation);
         }
 
-        public int GetLastID()
-        {
-            int max = ID;
+        foreach (var structure in Structures)
+            structure.Transform(translation, rotation);
+    }
 
-            foreach (VMFStructure structure in Structures)
-                max = Math.Max(structure.GetLastID(), max);
+    public int GetLastID()
+    {
+        var max = ID;
 
-            return max;
-        }
+        foreach (var structure in Structures)
+            max = Math.Max(structure.GetLastID(), max);
 
-        public int GetLastNodeID()
-        {
-            int max = ContainsKey("nodeid") ? (int) ((VMFNumberValue) this["nodeid"]).Value : 0;
+        return max;
+    }
 
-            foreach (VMFStructure structure in Structures)
-                max = Math.Max(structure.GetLastNodeID(), max);
+    public int GetLastNodeID()
+    {
+        var max = ContainsKey("nodeid") ? (int)((VMFNumberValue)this["nodeid"]).Value : 0;
 
-            return max;
-        }
+        foreach (var structure in Structures)
+            max = Math.Max(structure.GetLastNodeID(), max);
 
-        public bool ContainsKey(String key)
-        {
-            foreach (KeyValuePair<String, VMFValue> keyVal in Properties)
-                if (keyVal.Key == key)
-                    return true;
+        return max;
+    }
 
-            return false;
-        }
+    public bool ContainsKey(string key)
+    {
+        foreach (var keyVal in Properties)
+            if (keyVal.Key == key)
+                return true;
 
-        public override string ToString()
-        {
-            return Type + " {}";
-        }
+        return false;
+    }
 
-        public IEnumerator<VMFStructure> GetEnumerator()
-        {
-            return Structures.GetEnumerator();
-        }
+    public override string ToString()
+    {
+        return Type + " {}";
+    }
 
-        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
-        {
-            return Structures.GetEnumerator();
-        }
+    public IEnumerator<VMFStructure> GetEnumerator()
+    {
+        return Structures.GetEnumerator();
+    }
+
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+    {
+        return Structures.GetEnumerator();
     }
 }

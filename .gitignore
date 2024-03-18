@@ -15,3 +15,5 @@ TestResults
 *.log
 *.prt
 *.temp.vmf
+
+.vs

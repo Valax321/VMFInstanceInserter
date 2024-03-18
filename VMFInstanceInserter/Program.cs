@@ -1,99 +1,104 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+namespace VMFInstanceInserter;
 
-namespace VMFInstanceInserter
+class Program
 {
-    class Program
+    static void Main(string[] args)
     {
-        static void Main(string[] args)
-        {
 #if !DEBUG
-            Directory.SetCurrentDirectory(Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location));
+        Directory.SetCurrentDirectory(Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location));
 #endif
 
-            List<String> paths = new List<string>();
-            bool cleanup = false;
+        var paths = new List<string>();
+        var cleanup = false;
 
-            string[] fgdpaths = new string[0];
+        var fgdpaths = Array.Empty<string>();
 
-            for (int i = 0; i < args.Length; ++i) {
-                string arg = args[i];
-                if (!arg.StartsWith("-"))
-                    paths.Add(arg);
-                else {
-                    switch (arg.Substring(1).ToLower()) {
-                        case "c":
-                        case "-cleanup":
-                            cleanup = true;
-                            break;
-                        case "d":
-                        case "-fgd":
-                            fgdpaths = args[++i].Split(',').Select(x => x.Trim()).ToArray();
-                            break;
-                    }
-                }
-            }
-
-            if (paths.Count < 1) {
-                Console.WriteLine("Unexpected arguments. Aborting...");
-                return;
-            }
-
-            String vmf = paths[0];
-            String rootName = Path.GetDirectoryName(vmf) + Path.DirectorySeparatorChar + Path.GetFileNameWithoutExtension(vmf);
-            String dest = (paths.Count >= 2 ? paths[1] : rootName + ".temp.vmf");
-            String del = "Deleting ";
-            String renaming = "Renaming {0} to {1}";
-
-            if (cleanup) {
-                if (File.Exists(dest)) {
-                    Console.WriteLine(del + dest);
-                    File.Delete(dest);
-                }
-
-                String prt = rootName + ".prt";
-                String tempPrt = rootName + ".temp.prt";
-
-                if (File.Exists(tempPrt)) {
-                    if (File.Exists(prt)) {
-                        Console.WriteLine(del + prt);
-                        File.Delete(prt);
-                    }
-
-                    Console.WriteLine(renaming, tempPrt, prt);
-                    File.Move(tempPrt, prt);
-                }
-
-                String lin = rootName + ".lin";
-                String tempLin = rootName + ".temp.lin";
-
-                if (File.Exists(lin))
+        for (var i = 0; i < args.Length; ++i)
+        {
+            var arg = args[i];
+            if (!arg.StartsWith("-"))
+                paths.Add(arg);
+            else
+            {
+                switch (arg.Substring(1).ToLower())
                 {
-                    Console.WriteLine(del + lin);
-                    File.Delete(lin);
+                    case "c":
+                    case "-cleanup":
+                        cleanup = true;
+                        break;
+                    case "d":
+                    case "-fgd":
+                        fgdpaths = args[++i].Split(',').Select(x => x.Trim()).ToArray();
+                        break;
                 }
-
-                if (File.Exists(tempLin))
-                {
-                    Console.WriteLine(renaming, tempLin, lin);
-                    File.Move(tempLin, lin);
-                }
-            } else {
-                foreach (String path in fgdpaths) {
-                    VMFStructure.ParseFGD(path);
-                }
-
-                VMFFile file = new VMFFile(vmf);
-                file.ResolveInstances();
-                file.Save(dest);
             }
+        }
+
+        if (paths.Count < 1)
+        {
+            Console.WriteLine("Unexpected arguments. Aborting...");
+            return;
+        }
+
+        var vmf = paths[0];
+        var rootName = Path.GetDirectoryName(vmf) + Path.DirectorySeparatorChar + Path.GetFileNameWithoutExtension(vmf);
+        var dest = (paths.Count >= 2 ? paths[1] : rootName + ".temp.vmf");
+        var del = "Deleting ";
+        var renaming = "Renaming {0} to {1}";
+
+        if (cleanup)
+        {
+            if (File.Exists(dest))
+            {
+                Console.WriteLine(del + dest);
+                File.Delete(dest);
+            }
+
+            var prt = rootName + ".prt";
+            var tempPrt = rootName + ".temp.prt";
+
+            if (File.Exists(tempPrt))
+            {
+                if (File.Exists(prt))
+                {
+                    Console.WriteLine(del + prt);
+                    File.Delete(prt);
+                }
+
+                Console.WriteLine(renaming, tempPrt, prt);
+                File.Move(tempPrt, prt);
+            }
+
+            var lin = rootName + ".lin";
+            var tempLin = rootName + ".temp.lin";
+
+            if (File.Exists(lin))
+            {
+                Console.WriteLine(del + lin);
+                File.Delete(lin);
+            }
+
+            if (File.Exists(tempLin))
+            {
+                Console.WriteLine(renaming, tempLin, lin);
+                File.Move(tempLin, lin);
+            }
+        }
+        else
+        {
+            foreach (var path in fgdpaths)
+            {
+                VMFStructure.ParseFGD(path);
+            }
+
+            var file = new VMFFile(vmf);
+            file.ResolveInstances();
+            file.Save(dest);
+        }
 
 #if DEBUG
-            Console.WriteLine("Press any key to exit...");
-            Console.ReadKey();
+        Console.WriteLine("Press any key to exit...");
+        Console.ReadKey();
 #endif
-        }
     }
 }
