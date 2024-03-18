@@ -88,7 +88,7 @@ class VMFFile
         }
     }
 
-    public void ResolveInstances()
+    public void ResolveInstances(bool removeIOProxies = true)
     {
         Console.WriteLine("Resolving instances for " + OriginalPath + "...");
         var structures = Root.Structures;
@@ -110,6 +110,7 @@ class VMFFile
                             structures.RemoveAt(i);
 
                             var mappedOutputsForInstance = new Dictionary<string, List<IOProxyConnection>>();
+                            var mappedInputsForInstance = new Dictionary<string, List<IOProxyConnection>>();
 
                             var fileVal = structure["file"] as VMFStringValue;
                             var originVal = (structure["origin"] as VMFVector3Value) ?? new VMFVector3Value { X = 0, Y = 0, Z = 0 };
@@ -171,19 +172,25 @@ class VMFFile
                             var file = fileVal.String;
                             VMFFile vmf = null;
 
+                            var needsResolution = false;
                             if (stVMFCache.ContainsKey(file))
                                 vmf = stVMFCache[file];
                             else
                             {
                                 vmf = new VMFFile(file, Program.GameDir); // EVIL HACK
-                                if (vmf.Root != null)
-                                    vmf.ResolveInstances();
+                                needsResolution = true;
                             }
 
                             if (vmf.Root == null)
                             {
                                 Console.WriteLine("Could not insert!");
                                 continue;
+                            }
+
+                            if (needsResolution)
+                            {
+                                if (vmf.Root != null)
+                                    vmf.ResolveInstances();
                             }
 
                             foreach (var worldStruct in vmf.World)
@@ -236,9 +243,43 @@ class VMFFile
                             LastID = Root.GetLastID();
                             LastNodeID = Root.GetLastNodeID();
                             break;
-                        case "func_instance_parms":
                         case "func_instance_io_proxy":
+                            if (removeIOProxies)
+                                structures.RemoveAt(i);
+                            break;
+                        case "func_instance_parms":
                             structures.RemoveAt(i);
+                            break;
+                        default:
+                            var curEntConnections = structure.FirstOrDefault(x => x.Type == VMFStructureType.Connections);
+                            if (curEntConnections != null)
+                            {
+                                var newProps = new List<KeyValuePair<string, (string, VMFValue)>>();
+
+                                foreach (var (targetString, output) in curEntConnections.Properties)
+                                {
+                                    var outputParts = output.String.Split(',', StringSplitOptions.None);
+                                    var instanceName = outputParts[0];
+                                    var inputName = outputParts[1];
+
+                                    if (inputName.StartsWith("instance:"))
+                                    {
+                                        inputName = inputName.Replace("instance:", string.Empty);
+                                        var inputNameParts = inputName.Split(';');
+                                        inputName = inputNameParts[0];
+                                        var inputCommand = inputNameParts[1];
+
+                                        var fixedUpNameHack = instanceName + "-" + inputName;
+                                        newProps.Add(new KeyValuePair<string, (string, VMFValue)>(output.String, (targetString, new VMFStringValue() { String = $"{fixedUpNameHack},{inputCommand}," + string.Join(',', outputParts[2..]) })));
+                                    }
+                                }
+
+                                curEntConnections.Properties.RemoveAll(x => newProps.Any(y => x.Value.String == y.Key));
+                                foreach (var (_, connection) in newProps)
+                                {
+                                    curEntConnections.Properties.Add(new KeyValuePair<string, VMFValue>(connection.Item1, connection.Item2));
+                                }
+                            }
                             break;
                     }
             }
