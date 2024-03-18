@@ -65,6 +65,29 @@ class VMFFile
         stVMFCache.Add(path, this);
     }
 
+    private void ResolveInstanceProxyConnections(VMFStructure connections, Dictionary<string, List<IOProxyConnection>> outMappedOutputConnections)
+    {
+        foreach (var (targetString, output) in connections.Properties)
+        {
+            var targetParams = targetString.Split(';');
+            var targetName = targetParams[0];
+            var targetOutput = targetParams[1];
+
+            if (targetName.StartsWith("instance:"))
+            {
+                // This is the instance-local name of the entity to write this output to
+                targetName = targetName.Replace("instance:", string.Empty);
+                var list = outMappedOutputConnections.GetOrAdd(targetName, (_) => []);
+                Console.WriteLine($"Found proxy output: {targetString}");
+                list.Add(new IOProxyConnection()
+                {
+                    OutputName = targetOutput,
+                    InvokeString = output.String
+                });
+            }
+        }
+    }
+
     public void ResolveInstances()
     {
         Console.WriteLine("Resolving instances for " + OriginalPath + "...");
@@ -86,6 +109,8 @@ class VMFFile
                         case "func_instance":
                             structures.RemoveAt(i);
 
+                            var mappedOutputsForInstance = new Dictionary<string, List<IOProxyConnection>>();
+
                             var fileVal = structure["file"] as VMFStringValue;
                             var originVal = (structure["origin"] as VMFVector3Value) ?? new VMFVector3Value { X = 0, Y = 0, Z = 0 };
                             var anglesVal = (structure["angles"] as VMFVector3Value) ?? new VMFVector3Value { Pitch = 0, Roll = 0, Yaw = 0 };
@@ -95,6 +120,12 @@ class VMFFile
                             var pattern = new Regex("^replace[0-9]*$");
                             var replacements = new List<KeyValuePair<string, string>>();
                             var matReplacements = new List<KeyValuePair<string, string>>();
+
+                            var connections = structure.Structures.FirstOrDefault(x => x.Type == VMFStructureType.Connections);
+                            if (connections != null)
+                            {
+                                ResolveInstanceProxyConnections(connections, mappedOutputsForInstance);
+                            }
 
                             foreach (var keyVal in structure.Properties)
                             {
@@ -144,7 +175,7 @@ class VMFFile
                                 vmf = stVMFCache[file];
                             else
                             {
-                                vmf = new VMFFile(file, Path.GetDirectoryName(OriginalPath));
+                                vmf = new VMFFile(file, Path.Combine(Path.GetDirectoryName(OriginalPath), "instances"));
                                 if (vmf.Root != null)
                                     vmf.ResolveInstances();
                             }
@@ -174,6 +205,31 @@ class VMFFile
                                     var clone = rootStruct.Clone(LastID, LastNodeID, fixupStyle, targetName, replacements, matReplacements);
                                     clone.Transform(originVal, anglesVal);
                                     Root.Structures.Insert(index++, clone);
+
+                                    // Add each found proxied output
+                                    var rsTargetname = rootStruct["targetname"];
+                                    if (rsTargetname != null && mappedOutputsForInstance.TryGetValue(rsTargetname.String, out var rsConnections))
+                                    {
+                                        var rsConnectionsStruct = clone.FirstOrDefault(x => x.Type == VMFStructureType.Connections);
+                                        if (rsConnectionsStruct == null)
+                                        {
+                                            rsConnectionsStruct = new VMFStructure(VMFStructureType.Connections);
+                                            clone.Structures.Add(rsConnectionsStruct);
+                                        }
+
+                                        foreach (var rsConnection in rsConnections)
+                                        {
+                                            Console.WriteLine($"Remapped proxy output {rsConnection.OutputName} to {clone["targetname"]?.String}");
+
+                                            rsConnectionsStruct.Properties.Add(new KeyValuePair<string, VMFValue>(
+                                                rsConnection.OutputName,
+                                                new VMFStringValue() { String = rsConnection.InvokeString }
+                                            ));
+                                        }
+
+                                        // Remove all instance ProxyRelay outputs (the target entity won't exist)
+                                        rsConnectionsStruct.Properties.RemoveAll(x => x.Value.String.Contains(",ProxyRelay,"));
+                                    }
                                 }
                             }
 
@@ -181,6 +237,7 @@ class VMFFile
                             LastNodeID = Root.GetLastNodeID();
                             break;
                         case "func_instance_parms":
+                        case "func_instance_io_proxy":
                             structures.RemoveAt(i);
                             break;
                     }

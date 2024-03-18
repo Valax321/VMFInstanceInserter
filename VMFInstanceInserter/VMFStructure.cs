@@ -477,6 +477,13 @@ class VMFStructure : IEnumerable<VMFStructure>
         ID += idOffset;
     }
 
+    public VMFStructure(VMFStructureType type)
+    {
+        Type = type;
+        Properties = new();
+        Structures = new();
+    }
+
     public VMFStructure(string type, StreamReader reader)
     {
         if (stTypeDict.ContainsKey(type))
