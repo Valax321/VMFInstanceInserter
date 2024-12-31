@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace VMFInstanceInserter;
 
 class Program
@@ -8,6 +10,11 @@ class Program
     {
 #if !DEBUG
         Directory.SetCurrentDirectory(Path.GetDirectoryName(AppDomain.CurrentDomain.BaseDirectory));
+#endif
+
+#if DEBUG
+        if (!Debugger.IsAttached)
+            Debugger.Launch();
 #endif
 
         var paths = new List<string>();
