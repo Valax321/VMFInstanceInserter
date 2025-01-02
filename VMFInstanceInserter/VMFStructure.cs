@@ -160,7 +160,7 @@ class VMFStructure : IEnumerable<VMFStructure>
                 }
 
                 var curEntityDict = stEntitiesDict.GetOrAdd(classname, (_) => []);
-                if (fgdClass.ClassType == ClassType.SolidClass)
+                if (ent.ClassType == ClassType.SolidClass)
                 {
                     curEntityDict.TryAdd("angles", TransformType.None);
                 }
